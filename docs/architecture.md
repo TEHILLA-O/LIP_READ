@@ -105,7 +105,8 @@ order of magnitude below speech instead of above it.
 The thresholds were not picked by hand. `scripts/tune_motion_thresholds.py`
 sweeps them against the labelled fixtures and reports which settings catch
 every speech clip while firing on none of the still or head-moving clips; the
-defaults sit in the middle of that range. Hysteresis and a short hangover keep
+defaults were set in the middle of that range when it was first tuned
+(see [evaluation.md](evaluation.md) for a later rerun). Hysteresis and a short hangover keep
 an utterance open through the brief closures inside normal speech, and every
 utterance is clamped between `VSR_MIN_UTTERANCE_SECONDS` and
 `VSR_MAX_UTTERANCE_SECONDS`.
