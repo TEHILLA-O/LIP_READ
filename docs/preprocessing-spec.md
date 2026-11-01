@@ -2,7 +2,7 @@
 
 The input contract for the Auto-AVSR visual speech model. These values are not
 tunable: they reproduce the preprocessing the published checkpoints were trained
-with. Changing one without retraining does not produce an error — it produces a
+with. Changing one without retraining does not produce an error. It produces a
 model that runs normally and returns confident, wrong transcripts.
 
 Derived from `mpc001/auto_avsr` (`preparation/detectors/mediapipe/video_process.py`
@@ -75,16 +75,16 @@ alignment and therefore the crop.
 ## Alignment
 
 Frames are warped by a **similarity** transform (rotation, uniform scale,
-translation — no shear) estimated with `cv2.estimateAffinePartial2D` using
+translation, no shear) estimated with `cv2.estimateAffinePartial2D` using
 LMEDS. The target is a fixed reference face derived from
 `20words_mean_face.npy`, a 68-point mean face in a 256 × 256 frame:
 
 | Reference point | Built from | Position |
 | --- | --- | --- |
-| Right eye | mean of points 36–41 | (102.07, 94.27) |
-| Left eye | mean of points 42–47 | (156.36, 93.58) |
-| Nose tip | mean of points 31–35 | (129.00, 135.90) |
-| Mouth centre | mean of points 48–67 | (129.31, 157.82) |
+| Right eye | mean of points 36 to 41 | (102.07, 94.27) |
+| Left eye | mean of points 42 to 47 | (156.36, 93.58) |
+| Nose tip | mean of points 31 to 35 | (129.00, 135.90) |
+| Mouth centre | mean of points 48 to 67 | (129.31, 157.82) |
 
 Because the mouth lands at y ≈ 157.8, the 96 × 96 crop spans y ∈ [109.8, 205.8]
 and x ∈ [81.3, 177.3], comfortably inside the aligned face.
