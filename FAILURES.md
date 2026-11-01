@@ -21,7 +21,7 @@ Honest engineering notes for this project. Nothing here is invented for polish.
 
 ## Results
 
-Measured on LRS3 test utterances (five utterances in the README table):
+Measured on LRS3 test utterances (five utterances, see [docs/evaluation.md](docs/evaluation.md) for how to rerun them):
 
 | Input | WER |
 | --- | --- |
@@ -29,4 +29,6 @@ Measured on LRS3 test utterances (five utterances in the README table):
 | Full pipeline on composite clips | **25.7%** |
 | Published Auto-AVSR on full LRS3 (reference) | **20.3%** |
 
-Successful demo: download checkpoint, run ML API + Next web, upload a clip or use webcam, open debug with Shift+D.
+Both measured rows were rerun on 1 November 2026 (CPU, Linux, Python 3.11) and gave the same figures. Five utterances is a smoke test, not a benchmark.
+
+Successful demo: clone the Auto-AVSR reference checkout, download checkpoint, run ML API + Next web, upload a clip or use webcam, open debug with Shift+D.
