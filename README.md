@@ -1,266 +1,276 @@
-# Visual Speech
+# LIP_READ
 
-Reads speech from lip movement in video — uploaded clips or a live webcam — using
-a pretrained Auto-AVSR visual speech recognition model.
+LIP_READ reads speech from lip movement alone, from an uploaded video or a live
+webcam, and is meant for developers and researchers who want a working,
+inspectable visual speech recognition pipeline rather than a notebook demo.
 
-See [FAILURES.md](./FAILURES.md) for what can go wrong, what broke, how it was fixed, and results.
+There is no audio anywhere in the system. Every transcript comes from a
+*sequence* of mouth frames, so a single photo will never produce one.
 
-There is no audio anywhere in this system. Every transcript is produced from a
-*sequence* of video frames of a mouth, which is why nothing here will ever tell
-you what a single photograph is saying.
-
-> Transcripts are model predictions, not recordings of what was said. Even on the
-> benchmark this model was built for, roughly one word in five is wrong. Treat the
-> confidence score as a ranking signal, not a probability of being correct.
+> Transcripts are model predictions, not a record of what was said. On the
+> benchmark this model was built for, roughly one word in five is wrong. Treat
+> the confidence score as a way to rank guesses, not as a probability of being
+> correct.
 
 ## What it does
 
+- Transcribes an uploaded video clip (MP4, MOV, WebM, MKV, AVI) to English text.
+- Transcribes live from a webcam in the browser, cutting the stream into
+  utterances by watching the lips.
+- Returns the best transcript, a confidence score and the next-best
+  alternatives, or a plain reason when it cannot (no face, clip too short, model
+  not loaded). It never fills a failure with plausible text.
+- Shows a debug view of exactly what the model saw: face and mouth boxes, lip
+  outline, buffer depth, latency, tensor shapes and a downloadable mouth video.
+
+Nothing is trained in this repo. It runs the published, pretrained
+[Auto-AVSR](https://github.com/mpc001/auto_avsr) visual-only model (250M
+parameters, English) and the work here is everything around it: preprocessing
+that matches the model's training contract, decoding, live streaming,
+segmentation, an API, a web interface and the tests and evaluation that check
+each of those.
+
+## How it works
+
+```mermaid
+flowchart LR
+    A[Video file or webcam] --> B[Decode frames<br/>resample to 25 fps]
+    B --> C[Detect and track one face<br/>MediaPipe]
+    C --> D[Align face to 256x256<br/>crop mouth 96x96]
+    D --> E[Grayscale 88x88 tensor]
+    E --> F[Auto-AVSR Conformer<br/>pretrained]
+    F --> G[Joint CTC and attention<br/>beam search]
+    G --> H[Text, confidence,<br/>alternatives]
 ```
-video / camera
-  -> decode frames         -> 25 fps, exactly
-  -> detect + track a face -> MediaPipe, one speaker
-  -> align the face        -> similarity warp onto a canonical 256x256 face
-  -> crop the mouth        -> 96x96, centre-cropped to 88x88 grayscale
-  -> visual speech model   -> Auto-AVSR Conformer encoder, 250M parameters
-  -> joint CTC/attention beam search
-  -> transcript + confidence + alternatives
-```
 
-The exact input contract, and why none of those numbers are adjustable, is in
-[`docs/preprocessing-spec.md`](docs/preprocessing-spec.md).
+The web app (Next.js) talks to a FastAPI service over HTTP for uploads and a
+WebSocket for live video. The service owns the model; the web app only knows
+the shape of a result, not which model made it.
 
-## Accuracy
+More detail:
 
-Measured with `scripts/evaluate_lrs3.py` on LRS3 test utterances:
+- [docs/architecture.md](docs/architecture.md): components, live streaming,
+  how speech is detected from lip shape, privacy, swapping the model
+- [docs/preprocessing-spec.md](docs/preprocessing-spec.md): the exact input
+  contract the model needs, and why none of it is adjustable
+- [docs/api.md](docs/api.md): HTTP endpoints, the result object and the
+  WebSocket protocol
+- [docs/configuration.md](docs/configuration.md): every environment variable
+- [docs/evaluation.md](docs/evaluation.md): how accuracy is measured and how to
+  reproduce it
+- [FAILURES.md](FAILURES.md): what can go wrong, what went wrong, how it was
+  fixed, and results
 
-| Input | Word error rate | What it tells you |
+## Results
+
+Word error rate (WER) on LRS3 test utterances, measured with
+`scripts/evaluate_lrs3.py`:
+
+| Input | WER | What it tells you |
 | --- | --- | --- |
-| Reference mouth crops, straight to the model | 5.7% | The model, vocabulary and decoder are wired up correctly |
-| Full pipeline on composite clips | 25.7% | Our own detection, alignment and cropping preserve what the model needs |
-| Published Auto-AVSR on the full LRS3 test set | 20.3% | For reference; both numbers above use five utterances |
+| Reference mouth crops fed straight to the model | 5.7% (2/35 words) | The model, vocabulary and decoder are wired up correctly |
+| Full pipeline on composite video clips | 25.7% (9/35 words) | The cost of this project's own detection, alignment and cropping |
+| Published Auto-AVSR, full LRS3 test set | 20.3% | Upstream reference figure, not measured here |
 
-The two rows measure different things on purpose. The first bypasses this
-project's preprocessing entirely, so a bad number there means the model path is
-wrong. The second runs whole video files through the real chain, so the gap
-between the rows is the cost of our preprocessing.
+Both measured rows use only **five utterances**, so they show the pipeline
+works end to end; they are not a benchmark result. Accuracy on real webcam
+footage, other languages, or other speakers has not been measured yet. See
+[docs/evaluation.md](docs/evaluation.md) for how to rerun these numbers.
 
-## Layout
+## Quick start
 
+You need:
+
+- **Python 3.10, 3.11 or 3.12.** Not 3.13: the pinned MediaPipe 0.10.14 has no
+  wheels for it (see the comment in `requirements.txt`).
+- **Node 20+** for the web interface.
+- **About 1 GB of disk** for the model weights.
+- **Git**, to fetch the upstream Auto-AVSR code this project builds on.
+
+A CUDA GPU is used when present; the CPU works too, just more slowly. FFmpeg is
+not needed because PyAV bundles it.
+
+### 1. Python environment
+
+Linux or macOS:
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements-dev.txt
 ```
-apps/web            Next.js interface: camera, upload, transcript, debug view
-services/ml-api     FastAPI service: upload inference, live WebSocket
-ml/
-  preprocessing     decode, detect, track, align, crop, tensorise
-  models            VisualSpeechModel adapters (Auto-AVSR; VALLR/AV-HuBERT stubs)
-  decoding          SentencePiece vocabulary and beam search
-  inference         the engine that ties preprocessing, model and decoding together
-  streaming         rolling buffer, utterance segmentation, inference queue
-  evaluation        word and character error rate
-scripts             CLI tools: setup, download, transcribe, evaluate, fixtures
-tests               pytest suite; preprocessing is testable without a model
-references          upstream research checkouts, read but not imported wholesale
-```
 
-UI code and model code never mix. The web app knows only the shape of a result;
-it has no idea which model produced it.
+Swap `whl/cpu` for `whl/cu124` if you have an NVIDIA GPU with CUDA 12.4.
+PyTorch is installed on its own first because the right wheel depends on your
+CUDA setup.
 
-## Setup
-
-Requires Python 3.10+, Node 20+, and about 1 GB of disk for the checkpoint. A
-CUDA GPU is used automatically when present, and the CPU is used when it is not.
+Windows (PowerShell) has a script that does the same:
 
 ```powershell
-.\scripts\setup_env.ps1              # add -Cpu for a CPU-only PyTorch build
-python scripts\download_checkpoint.py
-python scripts\check_env.py
+.\scripts\setup_env.ps1          # add -Cpu for a CPU-only PyTorch build
 ```
 
-`setup_env.ps1` installs PyTorch from the right index first, then the rest of
-`requirements.txt`. FFmpeg is not needed: PyAV bundles it.
+### 2. Reference code and model weights
 
-## Running it
+The model code, the mean face used for alignment and the SentencePiece
+vocabulary come from the upstream Auto-AVSR repository. They are read from
+`references/auto_avsr`, which is not committed, so clone it there:
 
-Two processes. The backend loads the model once at start-up, which takes a few
-seconds.
+```bash
+git clone --depth 1 https://github.com/mpc001/auto_avsr.git references/auto_avsr
+python scripts/download_checkpoint.py   # about 1 GB, hash checked before use
+python scripts/check_env.py             # reports anything still missing
+```
 
-```powershell
-# terminal 1 - ML backend on http://127.0.0.1:8000
-cd services\ml-api
-..\..\.venv\Scripts\python.exe -m uvicorn app.main:app --port 8000
+The weights come from a Hugging Face mirror of the upstream checkpoint. The
+upstream code is Apache 2.0; the weights carry the terms of the datasets they
+were trained on and are intended for research use.
 
-# terminal 2 - interface on http://localhost:3000
-cd apps\web
+### 3. Run it
+
+Two processes. The backend loads the model once at start-up.
+
+```bash
+# terminal 1: ML backend on http://127.0.0.1:8000
+cd services/ml-api
+../../.venv/bin/python -m uvicorn app.main:app --port 8000
+
+# terminal 2: web interface on http://localhost:3000
+cd apps/web
 npm install
 npm run dev
 ```
 
-If the backend runs anywhere other than `http://127.0.0.1:8000`, copy
-`apps/web/.env.local.example` to `.env.local` and set `NEXT_PUBLIC_ML_API_URL`,
-then add that UI origin to `VSR_API_CORS_ORIGINS` on the backend.
+On Windows, the backend's Python is `..\..\.venv\Scripts\python.exe`.
 
-Press **Shift+D**, or use the control at the bottom of the page, for the debug
-view: face and mouth boxes, the measured lip outline, buffer depth, frame rates,
-inference latency, raw tensor shapes, alternative hypotheses, and a download of
-the exact mouth video the model was given.
+Open http://localhost:3000, allow the camera or upload a clip. Press
+**Shift+D**, or use the control at the bottom of the page, for the debug view.
 
-## Without the interface
+If the backend runs somewhere other than `http://127.0.0.1:8000`, create
+`apps/web/.env.local` with `NEXT_PUBLIC_ML_API_URL=<backend url>`, and add the
+web app's origin to `VSR_API_CORS_ORIGINS` on the backend.
 
-```powershell
-# transcribe a file, and write the MP4s showing what the model saw
-python scripts\transcribe.py data\test_videos\composite\sample_00_none.mp4 --debug
+## Usage without the interface
 
-# check preprocessing alone, before any model exists
-python scripts\transcribe.py clip.mp4 --preprocess-only --debug --overlay
+From the repo root, with the virtual environment active:
 
-# measure accuracy
-python scripts\evaluate_lrs3.py --source crops
-python scripts\evaluate_lrs3.py --source pipeline
+```bash
+# transcribe a file
+python scripts/transcribe.py path/to/clip.mp4
+
+# also write MP4s of exactly what the model saw (into debug_out/)
+python scripts/transcribe.py path/to/clip.mp4 --debug
+
+# check face and mouth framing only, no model needed
+python scripts/transcribe.py path/to/clip.mp4 --preprocess-only --debug --overlay
+
+# print the full result object as JSON
+python scripts/transcribe.py path/to/clip.mp4 --json
 ```
 
-## API
+Or call the API directly once the backend is running:
 
-| Endpoint | Purpose |
-| --- | --- |
-| `GET /health` | Whether the model is loaded, and on which device |
-| `GET /v1/models` | Registered adapters and the active one's input contract |
-| `POST /v1/transcribe` | Transcribe an uploaded video (`?debug=true` for MP4 exports) |
-| `POST /v1/preprocess` | Preprocess only — verify framing without loading a model |
-| `GET /v1/debug/{token}/{kind}` | Download a debug MP4 while it still exists |
-| `WS /v1/stream` | Live frames in, transcripts out |
+```bash
+curl -F "file=@clip.mp4;type=video/mp4" http://127.0.0.1:8000/v1/transcribe
+```
 
-Every transcription returns the same object:
+which returns, for example:
 
 ```json
 {
-  "text": "I would love to hear from you",
+  "text": "I WOULD LOVE TO HEAR FROM YOU",
   "confidence": 0.792,
-  "alternatives": [{ "text": "I would love to get it from you", "confidence": 0.653 }],
-  "processing_ms": 2195,
+  "alternatives": [{ "text": "I WOULD LOVE TO GET IT FROM YOU", "confidence": 0.6527 }],
+  "processing_ms": 779,
   "frames_processed": 34,
-  "mouth_detected": true
+  "mouth_detected": true,
+  "error": null
 }
 ```
 
-When there is no transcript, `text` is empty and `error` explains why — no face,
-clip too short, model not loaded. The service never substitutes plausible text
-for a failure.
+That output is from one of the composite test clips on a CPU. The full API,
+including the live WebSocket, is in [docs/api.md](docs/api.md).
 
-### Live streaming
+## Project structure
 
-The browser sends JPEG frames over the WebSocket at the model's frame rate. The
-receive loop only decodes, detects and buffers; utterances are handed to a
-worker thread. The queue holds two segments, and a third arrival displaces the
-oldest rather than extending the backlog — on a live stream a queued segment is
-already stale by the time it would be transcribed, and each one pushes the next
-result further behind. Drops are reported to the client rather than hidden.
-
-### Deciding when someone is speaking
-
-Running the model continuously is wasteful and produces nonsense between
-utterances, so the stream is cut into segments by watching the lips.
-
-The obvious signal — how much the pixels around the mouth change between frames
-— does not work. Measured on this project's fixtures, moving your head with your
-mouth shut scores *higher* than talking does, because translating a face across
-a background changes far more pixels than a jaw does:
-
-| Signal, per frame at 25 fps | Still | Head moving, mouth shut | Speaking |
-| --- | --- | --- | --- |
-| Frame difference around the mouth | 0.000 | 0.079 | 0.023 |
-| Change in lip aperture | 0.0003 | 0.004 | 0.008 - 0.08 |
-
-The second row is what the segmenter uses: the gap between the inner lips, from
-a MediaPipe FaceMesh fit, divided by the distance between the eyes. Normalising
-by a facial distance makes it a *shape* rather than a size, so it ignores where
-the head is, how far away it sits and how it is tilted, and responds only to the
-mouth actually moving. Head motion then reads an order of magnitude below
-speech instead of above it.
-
-Thresholds are not hand-picked. `scripts/tune_motion_thresholds.py` sweeps them
-against the labelled fixtures and reports which settings segment every speech
-clip while firing on none of the still or moving-head clips; the defaults sit in
-the middle of that plateau. Hysteresis and a hangover period keep an utterance
-open through the brief closures inside normal speech, and every utterance is
-clamped between `VSR_MIN_UTTERANCE_SECONDS` and `VSR_MAX_UTTERANCE_SECONDS`.
-
-This costs a second MediaPipe graph per frame. Measured end to end, `observe()`
-takes about 22 ms per 640x480 frame on CPU — a 45 fps ceiling against a 25 fps
-target, so the mesh is affordable without decimation.
-
-Two honest limits. A fast head movement can still open an utterance; it is
-abandoned without transcribing when the motion does not persist, so the cost is
-a wasted inference rather than an invented transcript. And when the mesh fails
-to fit a frame that the face detector handles, segmentation goes blind while the
-mouth indicator stays lit — the debug view reports the mesh state separately for
-exactly this reason.
-
-## Privacy
-
-Nothing a user sends is kept. Uploads are streamed to a temp directory, deleted
-in a `finally` block once inference returns, and any survivors of a crashed
-process are swept at start-up and on a timer. Camera frames are held only in a
-few-second rolling buffer in memory. Debug MP4s are opt-in per request and expire
-with the same sweep.
-
-Persistence is available but must be asked for: `VSR_PERSIST_UPLOADS=1`.
-
-## Configuration
-
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `VSR_MODEL` | `auto_avsr` | Which registered adapter to load |
-| `VSR_DEVICE` | `auto` | `auto`, `cuda` or `cpu` |
-| `VSR_BEAM_SIZE` | `20` | Beam search width |
-| `VSR_MIN_UTTERANCE_SECONDS` | `1.2` | Shortest live segment worth transcribing |
-| `VSR_MAX_UTTERANCE_SECONDS` | `4.0` | Longest live segment before it is cut |
-| `VSR_MOTION_START_THRESHOLD` | `0.016` | Lip-aperture change that opens an utterance |
-| `VSR_MOTION_STOP_THRESHOLD` | `0.008` | Change below which the mouth counts as still |
-| `VSR_MAX_QUEUED_JOBS` | `2` | Inference queue depth before dropping |
-| `VSR_PERSIST_UPLOADS` | `0` | Keep uploaded media after inference |
-| `VSR_ALLOW_DEBUG_EXPORT` | `1` | Permit debug MP4 export |
-| `VSR_API_CORS_ORIGINS` | `localhost:3000` | JSON array of allowed UI origins |
-| `VSR_API_MAX_UPLOAD_BYTES` | `209715200` | Upload ceiling, enforced while writing |
+```
+apps/web            Next.js interface: camera, upload, transcript, debug view
+services/ml-api     FastAPI service: upload inference and the live WebSocket
+ml/
+  preprocessing     decode, detect, track, align, crop, build the tensor
+  models            model adapters (Auto-AVSR works; VALLR, AV-HuBERT, custom are stubs)
+  decoding          SentencePiece vocabulary and beam search
+  inference         the engine joining preprocessing, model and decoding
+  streaming         rolling buffer, utterance segmentation, inference queue
+  evaluation        word and character error rate
+scripts             setup, download, transcribe, evaluate, test fixtures
+tests               pytest suite (158 tests, no model weights needed)
+docs                architecture, API, configuration, evaluation, preprocessing spec
+references          upstream Auto-AVSR checkout, cloned locally, not committed
+checkpoints         downloaded weights, not committed
+data                generated test clips and LRS3 samples, not committed
+```
 
 ## Tests
 
-```powershell
-.venv\Scripts\python.exe -m pytest        # 158 tests, no checkpoint required
-cd apps\web; npx eslint .; npm run build
+```bash
+python -m pytest                          # 158 tests
+cd apps/web && npx eslint . && npm run build
 ```
 
-The suite covers frame ordering and frame-rate conversion, face detection and
-single-speaker tracking, alignment and mouth cropping, tensor shape and
-normalisation, lip measurement, utterance segmentation, the API endpoints,
-WebSocket behaviour including a full frames-in-transcript-out pass, the inference
-queue's drop policy, and temp-file cleanup. Test clips are generated on demand by
-`scripts/make_test_videos.py`, so no video fixtures are committed and no real
-person's face is in the repository.
+The Python tests need the `references/auto_avsr` checkout from step 2 but not
+the model weights. Without the checkout, the alignment, pipeline and API tests
+fail on the missing mean face file. Test videos are generated on the fly from
+scikit-image's public-domain sample portrait, so no real person's face is
+committed.
 
-`scripts/make_talking_face_video.py` builds the harder fixture: it grafts an LRS3
-mouth sequence back into a full scene through the inverse alignment transform,
-producing an ordinary-looking video with real lip motion and a known transcript.
-That is what makes an end-to-end accuracy number possible without recording
-anyone.
+There is no CI yet, so run these before you push.
 
-## Swapping the model
+## Limitations
 
-Implement `VisualSpeechModel` (`load`, `preprocess`, `infer`, `decode`) and
-register it:
+- **English only, one speaker.** The checkpoint is an English model, and the
+  tracker follows a single face.
+- **Accuracy is modest and lightly measured.** Five utterances is a smoke
+  test, not a benchmark. Expect wrong words, especially on short phrases.
+- **Confidence is not calibrated.** It ranks hypotheses; it is not "chance this
+  is right".
+- **Preprocessing costs accuracy.** On the composite clips, the full pipeline
+  is about 20 points of WER worse than the reference crops. Some of that is the
+  composite clips themselves, which read harder than real video.
+- **Live mode can be fooled.** A fast head movement can open an utterance (it
+  is then dropped rather than transcribed), and when the face mesh fails on a
+  frame the segmenter goes blind for that frame.
+- **Setup has a manual step.** The upstream Auto-AVSR checkout has to be cloned
+  by hand. Error messages in the code mention `scripts/fetch_references.py`,
+  which is not in the repo yet; use the `git clone` command above instead.
+- **VALLR, AV-HuBERT and custom adapters are interface stubs** that raise an
+  error on purpose. Only Auto-AVSR runs.
+- **Research-use weights.** Check the dataset terms before using the
+  checkpoint in anything commercial.
 
-```python
-register_model("my_model", MyAdapter)
-```
+## Roadmap
 
-Then set `VSR_MODEL=my_model`. Nothing outside `ml/models` needs to change.
-`ml/models/custom.py` is a template. `VALLRAdapter` and `AVHubertAdapter` are
-interface stubs that raise rather than pretend — AV-HuBERT in particular needs an
-old Fairseq environment that the rest of this project deliberately does not
-depend on.
+- Add `scripts/fetch_references.py` so setup is one command, matching the
+  error messages.
+- Add CI that runs the Python tests and the web lint and build on every push.
+- Evaluate on a larger LRS3 sample and on a few consented real webcam
+  recordings, and publish those numbers next to the current ones.
+- A Linux and macOS setup script alongside `setup_env.ps1`.
+- A working second adapter (VALLR) to show the model swap in practice.
 
-## References
+## Credits
 
-Studied, not copied: [mpc001/auto_avsr](https://github.com/mpc001/auto_avsr) for
-preprocessing and the model, [MarshallT-99/VALLR](https://github.com/MarshallT-99/VALLR)
-for MediaPipe-based face handling and its phoneme decoding design, and
+Studied, not copied: [mpc001/auto_avsr](https://github.com/mpc001/auto_avsr)
+for preprocessing and the model, [MarshallT-99/VALLR](https://github.com/MarshallT-99/VALLR)
+for MediaPipe face handling and its phoneme decoding design, and
 [facebookresearch/av_hubert](https://github.com/facebookresearch/av_hubert) as
 research background.
+
+## Licence
+
+The code in this repository is under the [MIT License](LICENSE). The
+Auto-AVSR code it loads from `references/` is Apache 2.0, and the pretrained
+weights follow the terms of their training datasets (research use).
+
+Made by Tehilla Obanor. More work at https://cv.omnitest.dev/
